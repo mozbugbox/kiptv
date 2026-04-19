@@ -1,2 +1,5 @@
 PyQt6>=6.7.0
 m3u8>=6.0.0
+requests>=2.31.0
+defusedxml>=0.7.1
+urllib3>=2.0.0

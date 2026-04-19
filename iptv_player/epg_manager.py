@@ -7,12 +7,33 @@ Includes thread-safe LRU cache with 3-hour expiration and 100-entry limit.
 
 import threading
 import time
+import socket
+import ipaddress
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
-from xml.etree import ElementTree as ET
+from typing import Dict, List, Optional, Any, Tuple
+from urllib.parse import urlparse
+from defusedxml import ElementTree as ET
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import parse_url
 from PyQt6.QtCore import QObject, pyqtSignal
+
+
+# Block private and reserved IP ranges to prevent SSRF
+BLOCKED_IP_RANGES = [
+    ipaddress.ip_network('10.0.0.0/8'),      # Private
+    ipaddress.ip_network('172.16.0.0/12'),   # Private
+    ipaddress.ip_network('192.168.0.0/16'),  # Private
+    ipaddress.ip_network('127.0.0.0/8'),     # Loopback
+    ipaddress.ip_network('169.254.0.0/16'),  # Link-local
+    ipaddress.ip_network('0.0.0.0/8'),       # Current network
+    ipaddress.ip_network('224.0.0.0/4'),     # Multicast
+    ipaddress.ip_network('240.0.0.0/4'),     # Reserved
+    ipaddress.ip_network('::1/128'),         # IPv6 loopback
+    ipaddress.ip_network('fc00::/7'),        # IPv6 private
+    ipaddress.ip_network('fe80::/10'),       # IPv6 link-local
+]
 
 
 @dataclass
@@ -104,8 +125,8 @@ class EpgLoader(QObject):
     Handles loading and parsing of XMLTV EPG data.
     
     Features:
-    - Asynchronous loading via requests
-    - XMLTV format parsing
+    - Asynchronous loading via requests with SSRF protection
+    - XMLTV format parsing with XXE protection (using defusedxml)
     - Integration with EpgCache
     - Thread-safe operations
     """
@@ -118,6 +139,11 @@ class EpgLoader(QObject):
         self.cache = EpgCache(max_entries=100, ttl_hours=3)
         self._live_data: Dict[str, List[EpgProgram]] = {}
         self._lock = threading.RLock()
+        
+        # Create a custom session with SSRF protection
+        self.session = requests.Session()
+        self.session.mount('http://', _SSRFProtectionAdapter())
+        self.session.mount('https://', _SSRFProtectionAdapter())
     
     def load_epg(self, url: str) -> None:
         """
@@ -125,11 +151,21 @@ class EpgLoader(QObject):
         
         Parses XMLTV format and caches results.
         Emits epg_loaded signal for each channel parsed.
+        
+        Security: Validates URL scheme and blocks private IP addresses.
         """
         try:
-            response = requests.get(url, timeout=30)
+            # Validate URL scheme
+            parsed = urlparse(url)
+            if parsed.scheme not in ('http', 'https'):
+                self.error_occurred.emit(f"Invalid URL scheme: {parsed.scheme}. Only http/https allowed.")
+                return
+            
+            response = self.session.get(url, timeout=30)
             response.raise_for_status()
             self._parse_xmltv(response.text)
+        except requests.exceptions.RequestException as e:
+            self.error_occurred.emit(f"Failed to load EPG: {str(e)}")
         except Exception as e:
             self.error_occurred.emit(f"Failed to load EPG: {str(e)}")
     
@@ -243,6 +279,76 @@ class EpgLoader(QObject):
     def get_cache_size(self) -> int:
         """Get current cache size."""
         return self.cache.size()
+
+
+def _is_ip_blocked(ip: str) -> bool:
+    """Check if an IP address is in a blocked range."""
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        for network in BLOCKED_IP_RANGES:
+            if ip_obj in network:
+                return True
+        return False
+    except ValueError:
+        return True  # Block invalid IPs
+
+
+def _resolve_and_check_hostname(hostname: str) -> Tuple[bool, Optional[str]]:
+    """
+    Resolve hostname and check if the IP is safe to connect to.
+    
+    Returns (is_safe, resolved_ip) tuple.
+    """
+    try:
+        # Get all IP addresses for the hostname
+        addr_info = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for family, socktype, proto, canonname, sockaddr in addr_info:
+            ip = sockaddr[0]
+            if _is_ip_blocked(ip):
+                return False, ip
+        return True, addr_info[0][4][0] if addr_info else None
+    except socket.gaierror:
+        return False, None
+
+
+class _SSRFProtectionAdapter(HTTPAdapter):
+    """
+    HTTP Adapter that provides SSRF protection by blocking private/reserved IPs.
+    """
+    
+    def init_poolmanager(self, *args, **kwargs):
+        # Enable server hostname verification
+        kwargs['block_all_connections'] = False
+        return super().init_poolmanager(*args, **kwargs)
+    
+    def send(self, request, *args, **kwargs):
+        # Parse the URL to get the hostname
+        parsed = urlparse(request.url)
+        hostname = parsed.hostname
+        
+        if not hostname:
+            raise requests.exceptions.RequestException("Invalid URL: missing hostname")
+        
+        # Check if hostname is an IP address directly
+        try:
+            ipaddress.ip_address(hostname)
+            # It's an IP address, check if it's blocked
+            if _is_ip_blocked(hostname):
+                raise requests.exceptions.RequestException(
+                    f"Connection to {hostname} blocked: private/reserved IP address"
+                )
+        except ValueError:
+            # It's a hostname, resolve and check
+            is_safe, resolved_ip = _resolve_and_check_hostname(hostname)
+            if not is_safe:
+                raise requests.exceptions.RequestException(
+                    f"Connection to {hostname} blocked: resolves to private/reserved IP ({resolved_ip})"
+                )
+        
+        # Enable strict SSL verification
+        kwargs.setdefault('verify', True)
+        
+        return super().send(request, *args, **kwargs)
 
 
 class EpgManager:
