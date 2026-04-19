@@ -1,0 +1,55 @@
+```
+# Dependencies
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.venv/
+.env
+.env.local
+.env.*
+.envrc
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Tests
+.pytest_cache/
+.coverage
+coverage/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Coverage reports
+htmlcov/
+.coverage*
+
+# Mypy cache
+.mypy_cache/
+
+# Local configuration
+*.local
+```
