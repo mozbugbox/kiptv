@@ -8,11 +8,11 @@ import os
 # Add parent directory to path to import iptv_player
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import the EpgCache class from iptv_player
+# Import the EpgCache class from iptv_player.epg_manager
 try:
-    from iptv_player import EpgCache
+    from iptv_player.epg_manager import EpgCache
 except ImportError as e:
-    raise ImportError(f"EpgCache class not found in iptv_player.py: {e}")
+    raise ImportError(f"EpgCache class not found in iptv_player.epg_manager: {e}")
 
 class TestEpgCache(unittest.TestCase):
     def setUp(self):
@@ -41,7 +41,7 @@ class TestEpgCache(unittest.TestCase):
         # We access the internal _cache OrderedDict
         if "channel_1" in self.cache._cache:
             # Set timestamp to 3 hours + 1 minute ago (10860 seconds)
-            self.cache._cache["channel_1"] = (time.time() - 10860, self.sample_data)
+            self.cache._cache["channel_1"] = {'timestamp': time.time() - 10860, 'programs': self.sample_data}
             
         result = self.cache.get("channel_1")
         self.assertIsNone(result, "Cache should return None for expired entry")
@@ -52,7 +52,7 @@ class TestEpgCache(unittest.TestCase):
         
         # Set timestamp to 2 hours 59 minutes ago (10740 seconds)
         if "channel_1" in self.cache._cache:
-            self.cache._cache["channel_1"] = (time.time() - 10740, self.sample_data)
+            self.cache._cache["channel_1"] = {'timestamp': time.time() - 10740, 'programs': self.sample_data}
             
         result = self.cache.get("channel_1")
         self.assertEqual(result, self.sample_data, "Cache should return data for valid entry")

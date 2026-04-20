@@ -243,6 +243,57 @@ class EpgLoader(QObject):
     def get_cache_size(self) -> int:
         """Get current cache size."""
         return self.cache.size()
+    
+    def parse_xmltv(self, xml_content: str) -> Dict[str, List[dict]]:
+        """
+        Parse XMLTV content and return programs as dictionaries.
+        
+        This is a public method for testing purposes that returns raw dict data
+        instead of EpgProgram objects.
+        
+        Args:
+            xml_content: XML string containing TV guide data
+            
+        Returns:
+            Dictionary mapping channel IDs to lists of program dicts
+        """
+        try:
+            root = ET.fromstring(xml_content)
+            programs: Dict[str, List[dict]] = {}
+            
+            # Parse program listings
+            for programme_elem in root.findall('.//programme'):
+                channel_id = programme_elem.get('channel', '')
+                if not channel_id:
+                    continue
+                
+                start_str = programme_elem.get('start', '')
+                stop_str = programme_elem.get('stop', '')
+                
+                # Get title
+                title_elem = programme_elem.find('title')
+                title = title_elem.text if title_elem is not None and title_elem.text else "Unknown"
+                
+                # Get description
+                desc_elem = programme_elem.find('desc')
+                description = desc_elem.text if desc_elem is not None and desc_elem.text else ""
+                
+                if channel_id not in programs:
+                    programs[channel_id] = []
+                
+                programs[channel_id].append({
+                    'start': start_str,
+                    'end': stop_str,
+                    'title': title,
+                    'description': description
+                })
+            
+            return programs
+            
+        except ET.ParseError:
+            return {}
+        except Exception:
+            return {}
 
 
 class EpgManager:

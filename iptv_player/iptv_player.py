@@ -7,20 +7,52 @@ Uses custom m3u_parser module with m3u8 library and custom_tags_parser.
 import sys
 import os
 import subprocess
-import time
-from datetime import datetime
-from collections import OrderedDict
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QPushButton, QListWidget, QListWidgetItem,
-                             QComboBox, QLabel, QSplitter, QTreeWidget, QTreeWidgetItem,
-                             QStatusBar, QMessageBox, QFrame, QTextEdit, QFileDialog)
-from PyQt6.QtCore import QUrl, Qt, QTimer, QThread, pyqtSignal, QObject
+                             QHBoxLayout, QPushButton, QComboBox, QLabel, QSplitter, QTreeWidget, QTreeWidgetItem,
+                             QStatusBar, QMessageBox, QFrame, QFileDialog,
+                             QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QPixmap, QIcon, QFont
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
-from m3u_parser import load_playlist
-from epg_manager import EpgManager, EpgProgram
+from iptv_player.m3u_parser import load_playlist
+from iptv_player.epg_manager import EpgManager
+
+
+class ChannelItem:
+    """Represents a channel with its metadata and sources."""
+    
+    def __init__(self, name, logo_url=None, group_title=None, tvg_id=None, sources=None, 
+                 vlcopts=None, encryption=None, tvg_logo=None):
+        self.name = name
+        self.logo_url = logo_url or tvg_logo
+        self.group_title = group_title
+        self.tvg_id = tvg_id
+        self.sources = sources if sources else []
+        # vlcopts can be a dict or a list of dicts - normalize to list of dicts
+        if vlcopts is None:
+            self.vlcopts = []
+        elif isinstance(vlcopts, dict):
+            self.vlcopts = [vlcopts]
+        else:
+            self.vlcopts = vlcopts
+        self.encryption = encryption
+        self.current_source_index = 0
+    
+    def get_current_source(self):
+        """Get the currently selected source URL."""
+        if not self.sources:
+            return None
+        # Ensure index is within bounds
+        if self.current_source_index < 0 or self.current_source_index >= len(self.sources):
+            self.current_source_index = 0
+        return self.sources[self.current_source_index]
+    
+    @property
+    def current_source(self):
+        """Property accessor for current source."""
+        return self.get_current_source()
 
 
 class LogoLoader(QObject):
@@ -298,6 +330,7 @@ http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscape
             self.epg_table.setItem(0, 0, QTableWidgetItem(f"No program guide found for ID: {channel.tvg_id}"))
             return
 
+        from datetime import datetime
         now = datetime.now()
         current_row_index = -1
         
@@ -386,34 +419,8 @@ http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscape
 
         self.stop_channel()
 
-        # Build mpv command with VLC options converted to mpv equivalents and encryption support
-        mpv_args = ["mpv", "--no-terminal", "--force-window"]
-        
-        # Add VLC options as mpv equivalents
-        for vlcopt in self.current_channel.vlcopts:
-            for key, value in vlcopt.items():
-                opt_name, opt_value = self.vlcopt_to_mpv_opt(key, value)
-                if opt_name and opt_value:
-                    mpv_args.append(opt_name)
-                    mpv_args.append(opt_value)
-        
-        # Add HLS decryption options if encryption is present
-        if self.current_channel.encryption:
-            enc = self.current_channel.encryption
-            method = enc.get('method', '').upper()
-            uri = enc.get('uri')
-            iv = enc.get('iv')
-            
-            if method == 'AES-128' and uri:
-                # mpv can handle HLS encryption automatically via the playlist
-                # But we can also explicitly set options if needed
-                # For AES-128, mpv will fetch the key from the URI automatically
-                # If IV is specified, pass it explicitly
-                if iv:
-                    mpv_args.append(f'--hls-aes-iv={iv}')
-                # Note: mpv automatically handles key fetching from URI in HLS streams
-        
-        mpv_args.append(url)
+        # Build mpv command using the helper method
+        mpv_args = self.build_mpv_command(self.current_channel)
 
         try:
             self.mpv_process = subprocess.Popen(
@@ -458,6 +465,46 @@ http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscape
             return f'--{key}', value
         
         return None, None
+
+    def build_mpv_command(self, channel):
+        """
+        Build mpv command line arguments for a channel.
+        
+        Args:
+            channel: ChannelItem instance
+            
+        Returns:
+            List of command line arguments for mpv
+        """
+        mpv_args = ["mpv", "--no-terminal", "--force-window"]
+        
+        # Add VLC options as mpv equivalents
+        for vlcopt in channel.vlcopts:
+            if isinstance(vlcopt, dict):
+                for key, value in vlcopt.items():
+                    opt_name, opt_value = self.vlcopt_to_mpv_opt(key, value)
+                    if opt_name and opt_value:
+                        mpv_args.append(opt_name)
+                        mpv_args.append(opt_value)
+        
+        # Add HLS decryption options if encryption is present
+        if channel.encryption:
+            enc = channel.encryption
+            method = enc.get('method', '').upper()
+            uri = enc.get('uri')
+            iv = enc.get('iv')
+            
+            if method == 'AES-128' and uri:
+                # mpv can handle HLS encryption automatically via the playlist
+                # But we can also explicitly set options if needed
+                # For AES-128, mpv will fetch the key from the URI automatically
+                # If IV is specified, pass it explicitly
+                if iv:
+                    mpv_args.append(f'--hls-aes-iv={iv}')
+                # Note: mpv automatically handles key fetching from URI in HLS streams
+        
+        mpv_args.append(channel.get_current_source())
+        return mpv_args
 
     def stop_channel(self):
         if self.mpv_process:

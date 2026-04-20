@@ -11,7 +11,7 @@ from collections import OrderedDict
 from unittest.mock import patch, MagicMock
 
 # Import from the epg_manager module
-from epg_manager import EpgCache, EpgLoader, EpgProgram
+from iptv_player.epg_manager import EpgCache, EpgLoader, EpgProgram
 
 
 class TestEpgCache(unittest.TestCase):
